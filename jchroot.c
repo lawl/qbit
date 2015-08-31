@@ -80,33 +80,33 @@ static int exec_target(struct config *config) {
         fprintf(stderr, "': %m\n");
         return errno;
     }
-    return 0; /* No real return... */
+    return EXIT_FAILURE; /* No real return... */
 }
 
 /* Step 6: Drop (or increase) privileges */
 static int drop_privileges(struct config *config) {
     if (config->group != (gid_t) -1 && setgid(config->group)) {
         fprintf(stderr, "unable to change to GID %d: %m\n", config->group);
-        return EXIT_FAILURE;
+        return 0;
     }
     if (setgroups(0, NULL)) {
         /* This may fail on some recent kernels. See
          * https://lwn.net/Articles/626665/ for the rationale. */
         if (!config->userns) {
             fprintf(stderr, "unable to drop additional groups: %m\n");
-            return EXIT_FAILURE;
+            return 0;
         }
     }
     if (config->user != (uid_t) -1 && setuid(config->user)) {
         fprintf(stderr, "unable to change to UID %d: %m\n", config->user);
-        return EXIT_FAILURE;
+        return 0;
     }
 #ifdef PR_SET_NO_NEW_PRIVS
     if (config->group != (gid_t) -1 || config->user != (uid_t) -1) {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     }
 #endif
-    return exec_target(config);
+    return 1;
 }
 
 /* Step 5: Chroot with pivot_root */
@@ -114,26 +114,26 @@ static int changeroot(struct config *config) {
     char *template = NULL;
     if (mount("", "/", "", MS_PRIVATE | MS_REC, "") == -1) {
         fprintf(stderr, "unable to make current root private: %m\n");
-        return EXIT_FAILURE;
+        return 0;
     }
     if (mount(config->target, config->target, "bind", MS_BIND|MS_REC, "") == -1) {
         fprintf(stderr, "unable to turn new root into mountpoint: %m\n");
-        return EXIT_FAILURE;
+        return 0;
     }
     if (asprintf(&template, "%s/tmp/.pivotrootXXXXXX", config->target) == -1) {
         fprintf(stderr, "unable to allocate template directory: %m\n");
-        return EXIT_FAILURE;
+        return 0;
     }
     if (mkdtemp(template) == NULL) {
         fprintf(stderr, "unable to create temporary directory for pivot root: %m\n");
         free(template);
-        return EXIT_FAILURE;
+        return 0;
     }
     if (syscall(__NR_pivot_root, config->target, template) == -1) {
         fprintf(stderr, "unable to pivot root to %s: %m\n", config->target);
         rmdir(template);
         free(template);
-        return EXIT_FAILURE;
+        return 0;
     }
     if (chdir("/")) {
         fprintf(stderr, "unable to go into chroot: %m\n");
@@ -141,32 +141,31 @@ static int changeroot(struct config *config) {
          * have pivoted and we won't are likely to still use the old
          * mount... */
         free(template);
-        return EXIT_FAILURE;
+        return 0;
     }
     template += strlen(config->target);
     if (umount2(template, MNT_DETACH) == -1) {
         fprintf(stderr, "unable to umount old root: %m\n");
         /* Again, cannot really clean... */
         free(template);
-        return EXIT_FAILURE;
+        return 0;
     }
     if (rmdir(template) == -1) {
         fprintf(stderr, "unable to remove directory for old root: %m\n");
         /* ... */
         free(template);
-        return EXIT_FAILURE;
+        return 0;
     }
-    return drop_privileges(config);
+    return 1;
 }
 
 /* Step 4: Set hostname */
-static int set_hostname(struct config *config) {
+static void set_hostname(struct config *config) {
     if (config->hostname &&
             sethostname(config->hostname, strlen(config->hostname))) {
         fprintf(stderr, "unable to change hostname to '%s': %m\n",
                 config->hostname);
     }
-    return changeroot(config);
 }
 
 /* Step 3: Mount anything needed */
@@ -183,10 +182,20 @@ static int initialize_child(void *arg) {
         fprintf(stderr, "unable to synchronize with parent: %m\n");
         return EXIT_FAILURE;
     }
+    close(config->pipe_fd[0]);
+    /* Make sure we have no handles shared with parent anymore */
+    unshare(CLONE_FILES);
     
     /* MYTODO: ripped FSTAB parser out, replace with external mounting system */
 
-    return set_hostname(config);
+    set_hostname(config);
+    if(!changeroot(config)) {
+		return EXIT_FAILURE;
+	}
+	if(!drop_privileges(config)) {
+		return EXIT_FAILURE;
+	}
+	return exec_target(config);
 }
 
 static void update_usergroup_map(const char *map, char *map_file) {
