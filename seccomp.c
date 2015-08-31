@@ -70,6 +70,8 @@ SYS_iopl
 
 #include <linux/seccomp.h>
 
+#include "jchroot.h"
+
 
 #if defined(__i386__)
 # define ARCH_NR	AUDIT_ARCH_I386
@@ -230,15 +232,7 @@ static void filter_add_whitelist(int syscall) {
 	struct sock_filter filter[] = {
 		WHITELIST(syscall)
 	};
-#if 0
-{
-	int i;
-	unsigned char *ptr = (unsigned char *) &filter[0];
-	for (i = 0; i < sizeof(filter); i++, ptr++)
-		printf("%x, ", (*ptr) & 0xff);
-	printf("\n");
-}
-#endif
+
 	memcpy(&sfilter[sfilter_index], filter, sizeof(filter));
 	sfilter_index += sizeof(filter) / sizeof(struct sock_filter);	
 }
@@ -299,108 +293,23 @@ static void filter_end_whitelist(void) {
 
 
 /* drop filter for seccomp option */
-int seccomp_filter_drop(void) {
+int seccomp_filter_enable(struct config *config) {
 	filter_init();
+    
+    for(int i=0;i<config->filterlist->size;i++) {
+        if(config->filterlist->mode == 'w') {
+            filter_add_whitelist(config->filterlist->syscall[i]);
+        } else {
+            filter_add_blacklist(config->filterlist->syscall[i]);
+        }
+    }
 	
-	/* default seccomp */
-	if (arg_seccomp_list_drop == NULL) {
-#ifdef SYS_mount		
-		filter_add_blacklist(SYS_mount);
-#endif
-#ifdef SYS_umount2		
-		filter_add_blacklist(SYS_umount2);
-#endif
-#ifdef SYS_ptrace 		
-		filter_add_blacklist(SYS_ptrace);
-#endif
-#ifdef SYS_kexec_load		
-		filter_add_blacklist(SYS_kexec_load);
-#endif
-#ifdef SYS_open_by_handle_at		
-		filter_add_blacklist(SYS_open_by_handle_at);
-#endif
-#ifdef SYS_init_module		
-		filter_add_blacklist(SYS_init_module);
-#endif
-#ifdef SYS_finit_module // introduced in 2013
-		filter_add_blacklist(SYS_finit_module);
-#endif
-#ifdef SYS_delete_module		
-		filter_add_blacklist(SYS_delete_module);
-#endif
-#ifdef SYS_iopl		
-		filter_add_blacklist(SYS_iopl);
-#endif
-#ifdef 	SYS_ioperm	
-		filter_add_blacklist(SYS_ioperm);
-#endif
-#ifdef SYS_ni_syscall // new io permisions call on arm devices
-		filter_add_blacklist(SYS_ni_syscall);
-#endif
-#ifdef SYS_swapon		
-		filter_add_blacklist(SYS_swapon);
-#endif
-#ifdef SYS_swapoff		
-		filter_add_blacklist(SYS_swapoff);
-#endif
-#ifdef SYS_syslog		
-		filter_add_blacklist(SYS_syslog);
-#endif
-#ifdef SYS_process_vm_readv		
-		filter_add_blacklist(SYS_process_vm_readv);
-#endif
-#ifdef SYS_process_vm_writev		
-		filter_add_blacklist(SYS_process_vm_writev);
-#endif
-#ifdef SYS_mknod		
-		filter_add_blacklist(SYS_mknod);
-#endif
-		
-		// new syscalls in 0.9,23		
-#ifdef SYS_sysfs		
-		filter_add_blacklist(SYS_sysfs);
-#endif
-#ifdef SYS__sysctl	
-		filter_add_blacklist(SYS__sysctl);
-#endif
-#ifdef SYS_adjtimex		
-		filter_add_blacklist(SYS_adjtimex);
-#endif
-#ifdef 	SYS_clock_adjtime	
-		filter_add_blacklist(SYS_clock_adjtime);
-#endif
-#ifdef SYS_lookup_dcookie		
-		filter_add_blacklist(SYS_lookup_dcookie);
-#endif
-#ifdef 	SYS_perf_event_open	
-		filter_add_blacklist(SYS_perf_event_open);
-#endif
-#ifdef	SYS_fanotify_init 	
-		filter_add_blacklist(SYS_fanotify_init);
-#endif
-#ifdef SYS_kcmp
-		filter_add_blacklist(SYS_kcmp);
-#endif
-	}
-
-    /*
-	/ default seccomp filter with additional drop list /
-	if (arg_seccomp_list && arg_seccomp_list_drop == NULL) {
-		if (syscall_check_list(arg_seccomp_list, filter_add_blacklist)) {
-			fprintf(stderr, "Error: cannot load seccomp filter\n");
-			exit(1);
-		}
-	}
-	/ drop list /
-	else if (arg_seccomp_list == NULL && arg_seccomp_list_drop) {
-		if (syscall_check_list(arg_seccomp_list_drop, filter_add_blacklist)) {
-			fprintf(stderr, "Error: cannot load seccomp filter\n");
-			exit(1);
-		}
-	} */
+    if(config->filterlist->mode == 'w') {
+        filter_end_whitelist();
+    } else {
+        filter_end_blacklist();
+    }
 	
-	
-	filter_end_blacklist();
 	if (arg_debug)
 		filter_debug();
 

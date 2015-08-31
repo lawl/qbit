@@ -36,20 +36,11 @@
 #include <sys/mount.h>
 #include <sys/syscall.h>
 
-#ifndef PATH_MAX
-# define PATH_MAX 4096
-#endif
+#include "jchroot.h"
+#include "seccomp.h"
+#include "syscall_list.h"
 
-int seccomp_filter_drop(void);
 
-struct config {
-    int   netns;
-    uid_t user;
-    gid_t group;
-    char *hostname;
-    char *target;
-    char *const *command;
-};
 
 const char *progname;
 static void usage() {
@@ -57,11 +48,12 @@ static void usage() {
             "Usage: %s [OPTIONS] TARGET [--] COMMAND\n"
             "\n"
             "Available options:\n"
-            "  -N                         Use a new network namespace\n"
-            "  -u USER  | --user=USER     Specify user to use after chroot\n"
-            "  -g USER  | --group=USER    Specify group to use after chroot\n"
-            "  -n NAME  | --hostname=NAME Specify a hostname\n"
-            "  -e NAME=VALUE              Set an environment variable\n",
+            "  -N                              Use a new network namespace\n"
+            "  -n NAME       | --hostname=NAME Specify a hostname\n"
+            "  -s<SYSCALL>                     Append syscall to filter list\n"
+            "  -sc                             Don't use the default syscall blacklist\n"
+            "  -sw                             Set syscall filter mode to whitelist\n"
+            "  -e NAME=VALUE                   Set an environment variable\n",
             progname);
     exit(EXIT_FAILURE);
 }
@@ -78,28 +70,22 @@ static int exec_target(struct config *config) {
     return EXIT_FAILURE; /* No real return... */
 }
 
-/* Step 6: Drop (or increase) privileges */
+/* Step 6: Drop privileges */
 static int drop_privileges(struct config *config) {
-	/* MYTODO: Always drop privileges, because SUID */
-    if (config->group != (gid_t) -1 && setgid(config->group)) {
-        fprintf(stderr, "unable to change to GID %d: %m\n", config->group);
-        return 0;
-    }
+    if (setgid(getgid()) == -1) {
+		fprintf(stderr, "Failed to drop privileges!\n");
+		exit(EXIT_FAILURE);
+	}
+	if (setuid(getuid()) == -1) {
+		fprintf(stderr, "Failed to drop privileges!\n");
+		exit(EXIT_FAILURE);
+	}
     
     /* This may fail on some recent kernels. See
 	 * https://lwn.net/Articles/626665/ for the rationale. */
     setgroups(0, NULL);
         
-    if (config->user != (uid_t) -1 && setuid(config->user)) {
-        fprintf(stderr, "unable to change to UID %d: %m\n", config->user);
-        return 0;
-    }
-#ifdef PR_SET_NO_NEW_PRIVS
-    if (config->group != (gid_t) -1 || config->user != (uid_t) -1) {
-        prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-    }
-#endif
-	seccomp_filter_drop();
+
     return 1;
 }
 
@@ -165,10 +151,7 @@ static void set_hostname(struct config *config) {
 /* Step 3: Mount anything needed */
 /* actually: entry point after clone() */
 static int initialize_child(void *arg) {
-	
-	
-	
-    struct config *config = arg;
+	struct config *config = arg;
 
     
     /* MYTODO: ripped FSTAB parser out, replace with external mounting system */
@@ -177,9 +160,13 @@ static int initialize_child(void *arg) {
     if(!changeroot(config)) {
 		return EXIT_FAILURE;
 	}
+	
+	seccomp_filter_enable(config);
+	
 	if(!drop_privileges(config)) {
 		return EXIT_FAILURE;
 	}
+	
 	return exec_target(config);
 }
 
@@ -209,19 +196,32 @@ static int create_namespaces(struct config *config) {
     return WIFEXITED(ret)?WEXITSTATUS(ret):EXIT_FAILURE;
 }
 
+void parse_filterlist(char *arg, struct config *config) {
+	if(arg[0] == 'c') {
+		config->filterlist->usedefault=0;
+		return;
+	}
+	if(arg[0] == 'w') {
+		config->filterlist->mode='w';
+		return;
+	}
+	int argsyscall = syscall_nr_by_name(arg);
+	if(argsyscall != -1) {
+		config->filterlist->syscall[config->filterlist->size++]=argsyscall;
+	}
+}
+
 void parse_config(int argc, char * argv[], struct config *config) {
     int c;
     while (1) {
         int option_index = 0;
         static struct option long_options[] = {
-            { "user",     required_argument, 0, 'u' },
-            { "group",    required_argument, 0, 'g' },
             { "hostname", required_argument, 0, 'n' },
             { "help",     no_argument,       0, 'h' },
             { 0,          0,                 0, 0   }
         };
 
-        c = getopt_long(argc, argv, "hNUu:g:f:n:M:G:e:",
+        c = getopt_long(argc, argv, "hNUu:g:f:n:M:G:e:s:",
                 long_options, &option_index);
         if (c == -1) break;
 
@@ -229,38 +229,9 @@ void parse_config(int argc, char * argv[], struct config *config) {
             case 'N':
                 config->netns = 1;
                 break;
-            case 'u':
-                if (!optarg) usage();
-
-                struct passwd *passwd;
-                passwd = getpwnam(optarg);
-                if (!passwd) {
-                    config->user = strtoul(optarg, NULL, 10);
-                    if (errno) {
-                        fprintf(stderr, "'%s' is not a valid user\n", optarg);
-                        usage();
-                    }
-                } else {
-                    config->user = passwd->pw_uid;
-                    if (config->group == (gid_t) -1)
-                        config->group = passwd->pw_gid;
-                }
-                break;
-            case 'g':
-                if (!optarg) usage();
-
-                struct group *group;
-                group = getgrnam(optarg);
-                if (!group) {
-                    config->group = strtoul(optarg, NULL, 10);
-                    if (errno) {
-                        fprintf(stderr, "'%s' is not a valid group\n", optarg);
-                        usage();
-                    }
-                } else {
-                    config->group = group->gr_gid;
-                }
-                break;
+            case 's':
+				parse_filterlist(optarg, config);            
+				break;
             case 'n':
                 if (!optarg) usage();
                 config->hostname = optarg;
@@ -276,20 +247,27 @@ void parse_config(int argc, char * argv[], struct config *config) {
                 usage();
         }
     }
+    
+	if (optind == argc) usage();
+    config->target = argv[optind++];
+    if (optind == argc) usage();
+    config->command = argv + optind;
 }
 
 int main(int argc, char * argv[]) {
     struct config config;
     memset(&config, 0, sizeof(struct config));
-    config.user = config.group = -1;
+    
+    struct filterlist filterlist;
+    memset(&filterlist, 0, sizeof(struct filterlist));
+    filterlist.usedefault=1;
+    filterlist.size=0;
+    filterlist.mode='b';
+    config.filterlist = &filterlist;
+    
     progname = argv[0];
 
     parse_config(argc, argv, &config);
-
-    if (optind == argc) usage();
-    config.target = argv[optind++];
-    if (optind == argc) usage();
-    config.command = argv + optind;
 
     struct stat st;
     if (stat(config.target, &st) || !S_ISDIR(st.st_mode)) {
