@@ -1,10 +1,10 @@
-CFLAGS=-Werror -Wall -Wformat -Wformat-security -Werror=format-security -D_FORTIFY_SOURCE=2 -fstack-protector-all -fPIE -pie -ansi 
+CFLAGS=-Werror -Wall -Wformat -Wformat-security -Werror=format-security -D_FORTIFY_SOURCE=2 -fstack-protector-all -fPIE -pie 
 LDFLAGS=
 EXEC=jchroot
 
 all: $(EXEC)
 
-jchroot: jchroot.o
+jchroot: jchroot.o seccomp.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 clean:

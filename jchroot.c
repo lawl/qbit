@@ -40,8 +40,9 @@
 # define PATH_MAX 4096
 #endif
 
+int seccomp_filter_drop(void);
+
 struct config {
-    int   pipe_fd[2];
     int   netns;
     uid_t user;
     gid_t group;
@@ -98,6 +99,7 @@ static int drop_privileges(struct config *config) {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     }
 #endif
+	seccomp_filter_drop();
     return 1;
 }
 
