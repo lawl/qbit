@@ -42,15 +42,12 @@
 
 struct config {
     int   pipe_fd[2];
-    int   userns;
     int   netns;
     uid_t user;
     gid_t group;
     char *hostname;
     char *target;
     char *const *command;
-    const char *uid_map;
-    const char *gid_map;
 };
 
 const char *progname;
@@ -59,13 +56,10 @@ static void usage() {
             "Usage: %s [OPTIONS] TARGET [--] COMMAND\n"
             "\n"
             "Available options:\n"
-            "  -U                         Use a new user namespace\n"
             "  -N                         Use a new network namespace\n"
             "  -u USER  | --user=USER     Specify user to use after chroot\n"
             "  -g USER  | --group=USER    Specify group to use after chroot\n"
             "  -n NAME  | --hostname=NAME Specify a hostname\n"
-            "  -M MAP   | --uid-map=MAP   Comma-separated list of UID mappings\n"
-            "  -G MAP   | --gid-map=MAP   Comma-separated list of GID mappings\n"
             "  -e NAME=VALUE              Set an environment variable\n",
             progname);
     exit(EXIT_FAILURE);
@@ -85,18 +79,16 @@ static int exec_target(struct config *config) {
 
 /* Step 6: Drop (or increase) privileges */
 static int drop_privileges(struct config *config) {
+	/* MYTODO: Always drop privileges, because SUID */
     if (config->group != (gid_t) -1 && setgid(config->group)) {
         fprintf(stderr, "unable to change to GID %d: %m\n", config->group);
         return 0;
     }
-    if (setgroups(0, NULL)) {
-        /* This may fail on some recent kernels. See
-         * https://lwn.net/Articles/626665/ for the rationale. */
-        if (!config->userns) {
-            fprintf(stderr, "unable to drop additional groups: %m\n");
-            return 0;
-        }
-    }
+    
+    /* This may fail on some recent kernels. See
+	 * https://lwn.net/Articles/626665/ for the rationale. */
+    setgroups(0, NULL);
+        
     if (config->user != (uid_t) -1 && setuid(config->user)) {
         fprintf(stderr, "unable to change to UID %d: %m\n", config->user);
         return 0;
@@ -176,15 +168,6 @@ static int initialize_child(void *arg) {
 	
     struct config *config = arg;
 
-    /* First, wait for the parent to be ready */
-    char ch;
-    if (read(config->pipe_fd[0], &ch, 1) != 0) {
-        fprintf(stderr, "unable to synchronize with parent: %m\n");
-        return EXIT_FAILURE;
-    }
-    close(config->pipe_fd[0]);
-    /* Make sure we have no handles shared with parent anymore */
-    unshare(CLONE_FILES);
     
     /* MYTODO: ripped FSTAB parser out, replace with external mounting system */
 
@@ -198,45 +181,6 @@ static int initialize_child(void *arg) {
 	return exec_target(config);
 }
 
-static void update_usergroup_map(const char *map, char *map_file) {
-    int fd, j;
-    ssize_t map_len;
-    char *mapping = strdup(map);
-
-    map_len = strlen(mapping);
-    for (j = 0; j < map_len; j++)
-        if (mapping[j] == ',')
-            mapping[j] = '\n';
-
-    fd = open(map_file, O_RDWR);
-    if (fd == -1) {
-        fprintf(stderr, "unable to open %s: %m\n", map_file);
-        exit(EXIT_FAILURE);
-    }
-
-    if (write(fd, mapping, map_len) != map_len) {
-        fprintf(stderr, "unable to write to %s: %m\n", map_file);
-        exit(EXIT_FAILURE);
-    }
-
-    close(fd);
-    free(mapping);
-}
-
-/* Step 2: setup user mappings */
-static void setup_user_mappings(struct config *config, pid_t pid) {
-    char map_path[PATH_MAX];
-    if (config->uid_map != NULL) {
-        snprintf(map_path, PATH_MAX, "/proc/%ld/uid_map", (long) pid);
-        update_usergroup_map(config->uid_map, map_path);
-    }
-    if (config->gid_map != NULL) {
-        snprintf(map_path, PATH_MAX, "/proc/%ld/gid_map", (long) pid);
-        update_usergroup_map(config->gid_map, map_path);
-    }
-    close(config->pipe_fd[1]);     /* Sync with child */
-}
-
 /* Step 1: create a new PID/IPC/NS/UTS namespace */
 static int create_namespaces(struct config *config) {
     int ret;
@@ -246,24 +190,17 @@ static int create_namespaces(struct config *config) {
     void *stack = alloca(stack_size) + stack_size;
     int flags = CLONE_NEWPID | CLONE_NEWIPC | CLONE_NEWNS;
 
-    if (pipe(config->pipe_fd) == -1) {
-        fprintf(stderr, "failed to create a pipe: %m\n");
-        return EXIT_FAILURE;
-    }
 
     if (config->hostname) flags |= CLONE_NEWUTS;
-    if (config->userns) flags |= CLONE_NEWUSER;
     if (config->netns) flags |= CLONE_NEWNET;
     pid = clone(initialize_child,
             stack,
-            SIGCHLD | flags | CLONE_FILES,
+            SIGCHLD | flags,
             config);
     if (pid < 0) {
         fprintf(stderr, "failed to clone: %m\n");
         return EXIT_FAILURE;
     }
-
-    setup_user_mappings(config, pid);
 
     while (waitpid(pid, &ret, 0) < 0 && errno == EINTR)
         continue;
@@ -278,8 +215,6 @@ void parse_config(int argc, char * argv[], struct config *config) {
             { "user",     required_argument, 0, 'u' },
             { "group",    required_argument, 0, 'g' },
             { "hostname", required_argument, 0, 'n' },
-            { "uid-map",  required_argument, 0, 'M' },
-            { "gid-map",  required_argument, 0, 'G' },
             { "help",     no_argument,       0, 'h' },
             { 0,          0,                 0, 0   }
         };
@@ -289,15 +224,6 @@ void parse_config(int argc, char * argv[], struct config *config) {
         if (c == -1) break;
 
         switch (c) {
-            case 'U':
-                config->userns = 1;
-                break;
-            case 'M':
-                config->uid_map = optarg;
-                break;
-            case 'G':
-                config->gid_map = optarg;
-                break;
             case 'N':
                 config->netns = 1;
                 break;
@@ -357,12 +283,6 @@ int main(int argc, char * argv[]) {
     progname = argv[0];
 
     parse_config(argc, argv, &config);
-
-    if (!config.userns &&
-            (config.uid_map != NULL || config.gid_map != NULL)) {
-        fprintf(stderr, "cannot use UID/GID mapping without a user namespace\n");
-        usage();
-    }
 
     if (optind == argc) usage();
     config.target = argv[optind++];

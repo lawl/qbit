@@ -1,4 +1,4 @@
-CFLAGS=-Werror -Wall -ansi
+CFLAGS=-Werror -Wall -Wformat -Wformat-security -Werror=format-security -D_FORTIFY_SOURCE=2 -fstack-protector-all -fPIE -pie -ansi 
 LDFLAGS=
 EXEC=jchroot
 
