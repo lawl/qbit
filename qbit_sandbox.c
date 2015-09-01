@@ -22,7 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -36,7 +35,7 @@
 #include <sys/mount.h>
 #include <sys/syscall.h>
 
-#include "jchroot.h"
+#include "qbit_sandbox.h"
 #include "seccomp.h"
 #include "syscall_list.h"
 
@@ -221,7 +220,7 @@ void parse_config(int argc, char * argv[], struct config *config) {
             { 0,          0,                 0, 0   }
         };
 
-        c = getopt_long(argc, argv, "hNUu:g:f:n:M:G:e:s:",
+        c = getopt_long(argc, argv, "hNn:e:s:",
                 long_options, &option_index);
         if (c == -1) break;
 

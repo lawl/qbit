@@ -1,5 +1,5 @@
-#ifndef JCHROOT_H_
-#define JCHROOT_H_
+#ifndef QBIT_H_
+#define QBIT_H_
 
 #ifndef PATH_MAX
 # define PATH_MAX 4096
@@ -16,10 +16,11 @@ struct filterlist {
 };
 struct config {
     int   netns;
+    int   allowptrace;
     char *hostname;
     char *target;
     char *const *command;
     struct filterlist *filterlist;
 };
 
-#endif /* JCHROOT_H_ */
+#endif /* QBIT_H_ */

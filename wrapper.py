@@ -12,4 +12,4 @@ def createFilterListArg(mode, filterlist):
 	return arg
 
 filterarg = createFilterListArg("b", DEFAULT_BLACKLIST)
-os.system("./jchroot %s schroot/ /bin/bash" % filterarg)
+os.system("./qbit_sandbox %s schroot/ /bin/bash" % filterarg)

@@ -19,37 +19,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
-/* default seccomp filter
-	// seccomp
-	struct sock_filter filter[] = {
-		VALIDATE_ARCHITECTURE,
-		EXAMINE_SYSCALL,
-		BLACKLIST(SYS_mount),  // mount/unmount filesystems
-		BLACKLIST(SYS_umount2),
-		BLACKLIST(SYS_ptrace), // trace processes
-		BLACKLIST(SYS_kexec_load), // loading a different kernel
-		BLACKLIST(SYS_open_by_handle_at), // open by handle
-		BLACKLIST(SYS_init_module), // kernel module handling
-#ifdef SYS_finit_module // introduced in 2013
-		BLACKLIST(SYS_finit_module),
-#endif
-		BLACKLIST(SYS_delete_module),
-		BLACKLIST(SYS_iopl), // io permisions
-#ifdef SYS_ioperm
-		BLACKLIST(SYS_ioperm),
-#endif
-SYS_iopl
-		BLACKLIST(SYS_iopl), // io permisions
-#endif
-#ifdef SYS_ni_syscall), // new io permisions call on arm devices
-		BLACKLIST(SYS_ni_syscall),
-#endif
-		BLACKLIST(SYS_swapon), // swap on/off
-		BLACKLIST(SYS_swapoff),
-		BLACKLIST(SYS_syslog), // kernel printk control
-		RETURN_ALLOW
-	};
-*/
 #include <errno.h>
 #include <linux/filter.h>
 #include <sys/syscall.h>
@@ -70,7 +39,7 @@ SYS_iopl
 
 #include <linux/seccomp.h>
 
-#include "jchroot.h"
+#include "qbit_sandbox.h"
 
 
 #if defined(__i386__)
@@ -113,63 +82,8 @@ static int sfilter_alloc_size = 0;
 static int sfilter_index = 0;
 
 /* MYTODO: just to make it build */
-static int arg_debug=1;
-char *arg_seccomp_list_drop = NULL;
-char *arg_seccomp_list = NULL;
-char *arg_seccomp_list_keep = NULL;
+static int arg_debug=0;
 
-
-/* debug filter */
-void filter_debug(void) {
-	/* start filter */
-	struct sock_filter filter[] = {
-		VALIDATE_ARCHITECTURE,
-		EXAMINE_SYSCALL
-	};
-
-	/* print sizes */
-	printf("SECCOMP Filter:\n");
-	if (sfilter == NULL) {
-		printf("SECCOMP filter not allocated\n");
-		return;
-	}
-	if (sfilter_index < 4)
-		return;
-	
-	/* test the start of the filter */
-	if (memcmp(sfilter, filter, sizeof(filter)) == 0) {
-		printf("  VALIDATE_ARCHITECTURE\n");
-		printf("  EXAMINE_SYSCAL\n");
-	}
-	
-	/* loop trough blacklists */
-	int i = 4;
-	while (i < sfilter_index) {
-		/* minimal parsing! */
-		unsigned char *ptr = (unsigned char *) &sfilter[i];
-		int *nr = (int *) (ptr + 4);
-		if (*ptr	== 0x15 && *(ptr +14) == 0xff && *(ptr + 15) == 0x7f ) {
-			printf("  WHITELIST %d\n", *nr);
-			i += 2;
-		}
-		else if (*ptr	== 0x15 && *(ptr +14) == 0 && *(ptr + 15) == 0) {
-			printf("  BLACKLIST %d\n", *nr);
-			i += 2;
-		}
-		else if (*ptr == 0x06 && *(ptr +6) == 0 && *(ptr + 7) == 0 ) {
-			printf("  KILL_PROCESS\n");
-			i++;
-		}
-		else if (*ptr == 0x06 && *(ptr +6) == 0xff && *(ptr + 7) == 0x7f ) {
-			printf("  RETURN_ALLOW\n");
-			i++;
-		}
-		else {
-			printf("  UNKNOWN ENTRY!!!\n");
-			i++;
-		}
-	}
-}
 
 /* initialize filter */
 static void filter_init(void) {
@@ -292,7 +206,6 @@ static void filter_end_whitelist(void) {
 }
 
 
-/* drop filter for seccomp option */
 int seccomp_filter_enable(struct config *config) {
 	filter_init();
     
@@ -305,68 +218,26 @@ int seccomp_filter_enable(struct config *config) {
     }
 	
     if(config->filterlist->mode == 'w') {
+        filter_add_whitelist(SYS_setuid);
+        filter_add_whitelist(SYS_setgid);
+        filter_add_whitelist(SYS_setgroups);
+        filter_add_whitelist(SYS_dup);
         filter_end_whitelist();
     } else {
         filter_end_blacklist();
     }
 	
-	if (arg_debug)
-		filter_debug();
-
-
 
 	struct sock_fprog prog = {
 		.len = sfilter_index,
 		.filter = sfilter,
 	};
-
-	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
-		fprintf(stderr, "Warning: seccomp disabled, it requires a Linux kernel version 3.5 or newer.\n");
-		return 1;
-	}
-	else if (arg_debug) {
-		printf("seccomp enabled\n");
-	}
-	
-	return 0;
-}
-
-/* keep filter for seccomp option */
-int seccomp_filter_keep(void) {
-	filter_init();
-
-	/* these 4 syscalls are used by firejail after the seccomp filter is initialized */
-	filter_add_whitelist(SYS_setuid);
-	filter_add_whitelist(SYS_setgid);
-	filter_add_whitelist(SYS_setgroups);
-	filter_add_whitelist(SYS_dup);
-	
-	/* apply keep list */
     
-    /*
-	if (arg_seccomp_list_keep) {
-		if (syscall_check_list(arg_seccomp_list_keep, filter_add_whitelist)) {
-			fprintf(stderr, "Error: cannot load seccomp filter\n");
-			exit(1);
-		}
-	}*/
-	
-	filter_end_whitelist();
-	if (arg_debug)
-		filter_debug();
 
-
-	struct sock_fprog prog = {
-		.len = sfilter_index,
-		.filter = sfilter,
-	};
-
-	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
-		fprintf(stderr, "Warning: seccomp disabled, it requires a Linux kernel version 3.5 or newer.\n");
-		return 1;
-	}
-	else if (arg_debug) {
-		printf("seccomp enabled\n");
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 ||
+        prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) == -1) {
+		fprintf(stderr, "Could not enable seccomp. Exiting.\n");
+		exit(EXIT_FAILURE);
 	}
 	
 	return 0;
