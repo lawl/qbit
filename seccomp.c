@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 lawl
+ * Copyright (C) 2015, lawl
  * Copyright (C) 2014, 2015 netblue30 (netblue30@yahoo.com)
  *
  * This file is part of firejail project
@@ -234,7 +234,7 @@ int seccomp_filter_enable(struct config *config) {
 	};
     
 
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 ||
+	if(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 ||
         prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) == -1) {
 		fprintf(stderr, "Could not enable seccomp. Exiting.\n");
 		exit(EXIT_FAILURE);

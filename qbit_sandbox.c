@@ -50,14 +50,12 @@ static void usage() {
             "  -N                              Use a new network namespace\n"
             "  -n NAME       | --hostname=NAME Specify a hostname\n"
             "  -s<SYSCALL>                     Append syscall to filter list\n"
-            "  -sc                             Don't use the default syscall blacklist\n"
             "  -sw                             Set syscall filter mode to whitelist\n"
             "  -e NAME=VALUE                   Set an environment variable\n",
             progname);
     exit(EXIT_FAILURE);
 }
 
-/* Step 7: Execute command */
 static int exec_target(struct config *config) {
     if (execvp(config->command[0], config->command) == -1) {
         int i = 1;
@@ -69,7 +67,6 @@ static int exec_target(struct config *config) {
     return EXIT_FAILURE; /* No real return... */
 }
 
-/* Step 6: Drop privileges */
 static int drop_privileges(struct config *config) {
     if (setgid(getgid()) == -1) {
 		fprintf(stderr, "Failed to drop privileges!\n");
@@ -88,9 +85,9 @@ static int drop_privileges(struct config *config) {
     return 1;
 }
 
-/* Step 5: Chroot with pivot_root */
 static int changeroot(struct config *config) {
     char *template = NULL;
+    char *template_new = NULL;
     if (mount("", "/", "", MS_PRIVATE | MS_REC, "") == -1) {
         fprintf(stderr, "unable to make current root private: %m\n");
         return 0;
@@ -122,14 +119,15 @@ static int changeroot(struct config *config) {
         free(template);
         return 0;
     }
-    template += strlen(config->target);
-    if (umount2(template, MNT_DETACH) == -1) {
+    template_new = template;
+    template_new += strlen(config->target);
+    if (umount2(template_new, MNT_DETACH) == -1) {
         fprintf(stderr, "unable to umount old root: %m\n");
         /* Again, cannot really clean... */
         free(template);
         return 0;
     }
-    if (rmdir(template) == -1) {
+    if (rmdir(template_new) == -1) {
         fprintf(stderr, "unable to remove directory for old root: %m\n");
         /* ... */
         free(template);
@@ -138,7 +136,6 @@ static int changeroot(struct config *config) {
     return 1;
 }
 
-/* Step 4: Set hostname */
 static void set_hostname(struct config *config) {
     if (config->hostname &&
             sethostname(config->hostname, strlen(config->hostname))) {
@@ -147,8 +144,7 @@ static void set_hostname(struct config *config) {
     }
 }
 
-/* Step 3: Mount anything needed */
-/* actually: entry point after clone() */
+/* entry point after clone() */
 static int initialize_child(void *arg) {
 	struct config *config = arg;
 
@@ -169,7 +165,6 @@ static int initialize_child(void *arg) {
 	return exec_target(config);
 }
 
-/* Step 1: create a new PID/IPC/NS/UTS namespace */
 static int create_namespaces(struct config *config) {
     int ret;
     pid_t pid;
@@ -196,10 +191,6 @@ static int create_namespaces(struct config *config) {
 }
 
 void parse_filterlist(char *arg, struct config *config) {
-	if(arg[0] == 'c') {
-		config->filterlist->usedefault=0;
-		return;
-	}
 	if(arg[0] == 'w') {
 		config->filterlist->mode='w';
 		return;
@@ -259,7 +250,6 @@ int main(int argc, char * argv[]) {
     
     struct filterlist filterlist;
     memset(&filterlist, 0, sizeof(struct filterlist));
-    filterlist.usedefault=1;
     filterlist.size=0;
     filterlist.mode='b';
     config.filterlist = &filterlist;

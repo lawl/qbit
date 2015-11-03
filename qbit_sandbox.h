@@ -12,7 +12,6 @@ struct filterlist {
 	int size;
 	int syscall[FILTER_MAXSIZE];
 	char mode;
-	int usedefault;
 };
 struct config {
     int   netns;

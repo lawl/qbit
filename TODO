@@ -1,0 +1,12 @@
+mount must :
+-> check if file or directory
+-> if directory, mkdir -p in the sandbox
+-> if file, don't mkdir
+-> mount --rbind
+-> mount --make-rslave
+-> remount ro?
+
+sandbox X:
+-> XPRA? Xephyr seems shit for this
+
+remove qbit wrapper
